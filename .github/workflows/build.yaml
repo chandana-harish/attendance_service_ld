@@ -1,117 +1,164 @@
 name: Build
-
+ 
 on:
-  workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Docker image tag"
-        required: true
-        default: "latest"
 
+  # push:
+
+  #   branches:
+
+  #     - master
+
+  workflow_dispatch:
+
+    inputs:
+
+      image_tag:
+
+        description: "Docker image tag"
+
+        required: true
+
+        default: "latest"
+ 
 jobs:
+
   build:
-    name: Build and Analyze
+
+    name: Build and analyze
+
     runs-on: ubuntu-latest
+ 
+    # ✅ GLOBAL ENV (important fix)
 
     env:
+
       IMAGE_NAME: sps-auth-service
+
       IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
-
+ 
     steps:
+ 
+      - name: Clone to VM
 
-      - name: Checkout Code
         uses: actions/checkout@v4
-
-      # ✅ SonarQube Scan
+ 
       - name: SonarQube Scan
+
         uses: SonarSource/sonarqube-scan-action@v6
+
         env:
+
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+ 
+      - name: Quality Gate check
 
-      - name: Quality Gate Check
         uses: SonarSource/sonarqube-quality-gate-action@v1
+
+        id: qualitygate
+
         timeout-minutes: 5
+
         env:
+
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # ✅ Correct Snyk for Node
-      - name: Snyk Scan (Node)
-        uses: snyk/actions/node@master
+      - name: Snyk Scan
+
+        uses: snyk/actions/python@master
+
         continue-on-error: true
+
         env:
+
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-      # ✅ Docker Build
-      - name: Set up Docker
+        with:
+
+          command: monitor
+ 
+      - name: Setup Docker
+
         uses: docker/setup-buildx-action@v3
 
       - name: Build Image
-        run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
 
-      # ✅ Login + Push
-      - name: DockerHub Login
+        run: docker build -t ${{secrets.DOCKER_USERNAME}}/${{env.IMAGE_NAME}}:${{env.IMAGE_TAG}} .
+
+      - name: Dockerhub login
+
         uses: docker/login-action@v3
+
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Push Image
+          username: ${{secrets.DOCKER_USERNAME}} 
+
+          password: ${{secrets.DOCKER_PASSWORD}}
+ 
+      - name: Push to Hub
+
+        run: docker push ${{secrets.DOCKER_USERNAME}}/${{env.IMAGE_NAME}}:${{env.IMAGE_TAG}}
+ 
+      - name: Trivy Install
+
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
-      # ✅ Install Trivy
-      - name: Install Trivy
+          sudo apt update
+
+          sudo apt install trivy -y
+ 
+      - name: Scan Image
+
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget
-          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.50.1_Linux-64bit.deb
-          sudo dpkg -i trivy_0.50.1_Linux-64bit.deb
 
-      # ✅ Scan (DO NOT FAIL PIPELINE, JUST REPORT)
-      - name: Trivy Scan Report
-        run: |
-          trivy image \
-            --severity HIGH,CRITICAL \
-            --no-progress \
-            --format table \
-            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-
-      # ✅ Optional: Fail only if too many CRITICAL (controlled)
-      - name: Enforce Security Gate
-        run: |
-          trivy image \
-            --severity CRITICAL \
-            --exit-code 1 \
-            --ignore-unfixed \
-            --no-progress \
-            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} || echo "⚠️ Vulnerabilities found but not blocking build"
-
-      # ✅ Success Email
+          trivy image --severity CRITICAL --exit-code=0 ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+ 
       - name: Send Success Email
-        if: success()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Build Passed ✅"
-          body: "Build, scan, and deployment completed successfully."
-          to: ${{ secrets.EMAIL_USERNAME }}
-          from: GitHub Actions
 
-      # ❌ Failure Email (generic)
-      - name: Send Failure Email
-        if: failure()
+        if: success()
+
         uses: dawidd6/action-send-mail@v3
+
         with:
+
           server_address: smtp.gmail.com
+
           server_port: 465
+
           username: ${{ secrets.EMAIL_USERNAME }}
+
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Build Failed ❌"
-          body: "Pipeline failed. Check logs (SonarQube / Docker / Trivy)."
+
+          subject: "Build Passed"
+
+          body: "No vulnerabilities found."
+
           to: ${{ secrets.EMAIL_USERNAME }}
+
           from: GitHub Actions
+ 
+      - name: Send Failure Email
+
+        if: failure()
+
+        uses: dawidd6/action-send-mail@v3
+
+        with:
+
+          server_address: smtp.gmail.com
+
+          server_port: 465
+
+          username: ${{ secrets.EMAIL_USERNAME }}
+
+          password: ${{ secrets.EMAIL_PASSWORD }}
+
+          subject: "Build Failed"
+
+          body: "Quality Gate failed. Check SonarQube."
+
+          to: ${{ secrets.EMAIL_USERNAME }}
+
+          from: GitHub Actions
+ 
