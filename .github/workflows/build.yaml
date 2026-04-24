@@ -32,7 +32,7 @@ jobs:
 
     env:
 
-      IMAGE_NAME: sps-auth-service
+      IMAGE_NAME: attendance-service-lb
 
       IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
  
